@@ -1,3 +1,5 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
@@ -52,6 +54,11 @@ class HungarianMatcher(nn.Module):
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
         # The 1 is a constant that doesn't change the matching, it can be ommitted.
+        # print("tgt_ids dtype:", tgt_ids.dtype)  # 应该是 torch.int64
+        # print("tgt_ids min:", tgt_ids.min().item())
+        # print("tgt_ids max:", tgt_ids.max().item())
+        # print("out_prob.shape:", out_prob.shape)
+
         cost_class = -out_prob[:, tgt_ids]
 
         # Compute the L1 cost between boxes
@@ -84,6 +91,9 @@ class HungarianMatcher(nn.Module):
         rel_tgt_ids = torch.cat([v["rel_labels"] for v in targets])
         rel_tgt_bbox = torch.cat([v["rel_vecs"] for v in targets])
 
+        if len(targets) == 0:
+            print("Warning: targets is empty, skipping matching process")
+            return {}
         # interaction category semantic distance
         rel_cost_list = []
 

@@ -1,3 +1,5 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 import math
 from torchvision.ops.boxes import box_area

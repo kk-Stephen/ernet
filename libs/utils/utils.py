@@ -87,6 +87,7 @@ def setup_logger(final_output_dir, time_str, rank, phase='train'):
 
 def get_model(cfg, device):
     module = importlib.import_module(cfg.MODEL.FILE)
+    #他在某处强制使用了cuda 1
     model, criterion, postprocessors = getattr(module, 'build_model')(cfg, device)
 
     return model, criterion, postprocessors
@@ -124,7 +125,9 @@ def load_checkpoint(cfg, model, optimizer, lr_scheduler, device, module_name='mo
             checkpoint = torch.load(resume_path, map_location='cpu')
             # resume
             if 'state_dict' in checkpoint:
-                model.module.load_state_dict(checkpoint['state_dict'], strict=False)
+                #model.module.load_state_dict(checkpoint['state_dict'], strict=False) 并行化训练的
+                #单GPU
+                model.load_state_dict(checkpoint['state_dict'], strict=False)
                 logging.info(f'==> model pretrained from {resume_path} \n')
             elif 'model' in checkpoint:
                 if module_name == 'detr':
@@ -517,8 +520,9 @@ def get_dataset(cfg, step):
     Dataset = getattr(module, cfg.DATASET.NAME)
     data_root = cfg.DATASET.ROOT # abs path in yaml
     # get train data list
-    train_root = osp.join(data_root, 'images/train')
-    train_set = [d for d in os.listdir(train_root) if osp.isdir(osp.join(train_root, d))]  
+    train_root = osp.join(data_root, 'train')
+    #train_set = [d for d in os.listdir(train_root) if osp.isdir(osp.join(train_root, d))]
+    train_set = []
     if len(train_set) == 0:
         train_set = ['.']
     train_list = []
@@ -528,8 +532,9 @@ def get_dataset(cfg, step):
         train_sub_set = Dataset(cfg, train_sub_root, train_transform)
         train_list.append(train_sub_set)
     # get eval data list
-    eval_root = osp.join(data_root, 'images/test')
-    eval_set = [d for d in os.listdir(eval_root) if osp.isdir(osp.join(eval_root, d))]
+    eval_root = osp.join(data_root, 'test')
+    #eval_set = [d for d in os.listdir(eval_root) if osp.isdir(osp.join(eval_root, d))]
+    eval_set = []
     if len(eval_set) == 0:
         eval_set = ['.']
     eval_list = []      

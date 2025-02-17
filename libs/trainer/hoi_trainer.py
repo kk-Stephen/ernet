@@ -6,7 +6,8 @@ import sys
 import time
 import json
 from tqdm import tqdm
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from torch import autograd
 
@@ -71,7 +72,7 @@ class HOITrainer(BaseTrainer):
             drop_rate = self.cfg.TRANSFORMER.DROPOUT + 0.05*step
             self.set_dropout(self.model, drop_rate=drop_rate)
             print('Dropout is now set to {}'.format(drop_rate))
-            self.resume_init = False
+            #self.resume_init = False
 
         start_time = time.time()
         self.model.train()
@@ -185,8 +186,10 @@ class HOITrainer(BaseTrainer):
 
         results = []
         count = 0
-        
+        print('dataset_size: {}'.format(len(eval_loader.dataset)))
         for data in tqdm(eval_loader):
+            if data is None:
+                print('dataset is empty')
             imgs, targets, filenames = data
             imgs = [img.to(self.device) for img in imgs]
             # targets are list type

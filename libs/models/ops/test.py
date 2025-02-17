@@ -9,7 +9,8 @@
 from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import time
 import torch
 import torch.nn as nn

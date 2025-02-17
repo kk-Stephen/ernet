@@ -6,7 +6,7 @@ from PIL import Image
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import random
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from torch.utils.data import Dataset
 

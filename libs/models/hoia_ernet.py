@@ -5,7 +5,7 @@ import sys
 import time
 import math
 import copy
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -78,6 +78,7 @@ class ERNet_HOIA(nn.Module):
         # Number of Feature Stages
         if num_feature_levels > 1:
             num_backbone_outs = len(backbone.num_channels)
+            # backbone.num_channels是一个包含骨干网络输出每一层的通道数的列表，num_backbone_outs即是这个列表的长度。
             input_proj_list = []
             for _ in range(num_backbone_outs):
                 in_channels = backbone.num_channels[_]
@@ -108,7 +109,9 @@ class ERNet_HOIA(nn.Module):
         # bool two-stage 
         self.two_stage = two_stage
 
+        # 对网络进行初始化
         prior_prob = 0.01
+        # bias_value 是通过计算逻辑回归的偏置来调整类别预测的初始化。具体来说，这一行代码计算了一个使得正负类的预测概率接近 prior_prob 的偏置值。
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         self.class_embed.layers[-1].bias.data = torch.ones(num_classes['obj_labels'] + 1) * bias_value
         self.rel_class_embed.layers[-1].bias.data = torch.ones(num_classes['rel_labels']) * bias_value
@@ -125,6 +128,7 @@ class ERNet_HOIA(nn.Module):
         num_pred = (transformer.decoder.num_layers + 1) if two_stage else transformer.decoder.num_layers
 
         if with_box_refine:
+            # _get_clones中每一个module（class_embed...）实例是独立的不共享权重，且独立更新
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.rel_class_embed = _get_clones(self.rel_class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
@@ -142,6 +146,7 @@ class ERNet_HOIA(nn.Module):
             self.transformer.decoder.rel_src_embed = self.rel_src_embed
             self.transformer.decoder.rel_dst_embed = self.rel_dst_embed
         else:
+            # nn.ModuleList([self.class_embed for _ in range(num_pred)])中module是指向同一module的引用，权重是共享的
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             nn.init.constant_(self.rel_bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList([self.class_embed for _ in range(num_pred)])

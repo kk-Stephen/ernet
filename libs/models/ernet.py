@@ -5,7 +5,8 @@ import sys
 import time
 import math
 import copy
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -28,6 +29,7 @@ class ERNet(nn.Module):
                  backbone, 
                  transformer, 
                  num_classes=dict(
+                     sub_label = 13,
                      obj_labels=91,
                      rel_labels=117
                  ), 
@@ -109,7 +111,9 @@ class ERNet(nn.Module):
         # bool two-stage 
         self.two_stage = two_stage
 
+        #对网络进行初始化
         prior_prob = 0.01
+        #bias_value 是通过计算逻辑回归的偏置来调整类别预测的初始化。具体来说，这一行代码计算了一个使得正负类的预测概率接近 prior_prob 的偏置值。
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         self.class_embed.layers[-1].bias.data = torch.ones(num_classes['obj_labels'] + 1) * bias_value
         self.rel_class_embed.layers[-1].bias.data = torch.ones(num_classes['rel_labels']) * bias_value
@@ -126,6 +130,7 @@ class ERNet(nn.Module):
         num_pred = (transformer.decoder.num_layers + 1) if two_stage else transformer.decoder.num_layers
 
         if with_box_refine:
+            #_get_clones中每一个module（class_embed...）实例是独立的不共享权重，且独立更新
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.rel_class_embed = _get_clones(self.rel_class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
@@ -142,6 +147,7 @@ class ERNet(nn.Module):
             self.transformer.decoder.rel_src_embed = self.rel_src_embed
             self.transformer.decoder.rel_dst_embed = self.rel_dst_embed
         else:
+            # nn.ModuleList([self.class_embed for _ in range(num_pred)])中module是指向同一module的引用，权重是共享的
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             nn.init.constant_(self.rel_bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList([self.class_embed for _ in range(num_pred)])
@@ -901,10 +907,13 @@ class PostProcess(nn.Module):
         rel_o_scores, rel_o_ids = torch.max(dist_o, dim=-1)
         hoi_scores = rel_scores * s_scores[rel_s_ids].unsqueeze(-1) * \
             o_scores[rel_o_ids].unsqueeze(-1)
-
+        print(rel_o_ids)
         # exclude non-exist hoi categories of training
         rel_array = torch.from_numpy(np.load(self.rel_array_path)).to(hoi_scores.device)
         valid_hoi_mask = rel_array[o_clses[rel_o_ids], 1:]
+        print('rel_array: {}'.format(rel_array.shape))
+        print('hoi_scores: {}'.format(hoi_scores.shape))
+        print('valid_hoi_mask: {}'.format(valid_hoi_mask.shape))
         hoi_scores = (valid_hoi_mask * hoi_scores).reshape(-1, 1)
         hoi_vars = (valid_hoi_mask * hoi_vars).reshape(-1, 1)
         hoi_labels = hoi_labels.reshape(-1, 1)

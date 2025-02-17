@@ -9,10 +9,10 @@ from __future__ import with_statement
 
 import argparse
 import os
-
+import importlib
 import numpy as np
 import random
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import pprint
 import torch
 import torch.backends.cudnn as cudnn
@@ -121,6 +121,7 @@ def main_per_worker():
 
     # distribution
     if args.distributed:
+        print('args.distributed:'.format(args.distributed))
         if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
             args.rank = int(os.environ["RANK"])
             args.world_size = int(os.environ['WORLD_SIZE'])
@@ -168,14 +169,20 @@ def main_per_worker():
         random.seed(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-
-        if cfg.DEVICE == 'cuda':
-            torch.cuda.set_device(local_rank)
-        device = torch.device(cfg.DEVICE)
-        model, criterion, postprocessors = get_model(cfg, device)  
-        model = torch.nn.DataParallel(model).to(device)
+        # if cfg.DEVICE == 'cuda':
+        #     torch.cuda.set_device(local_rank)
+        # device = torch.device(cfg.DEVICE)
+        # os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print("Device name:", torch.cuda.get_device_name(0))
+        torch.backends.cudnn.enabled = False
+        print("get model!")
+        model, criterion, postprocessors = get_model(cfg, device)
+        print("model to")
+        model.to(device)
+        #model = torch.nn.DataParallel(model).to(device)
     
-    model_without_ddp = model.module
+    #model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('Number of params:', n_parameters)
 
@@ -189,9 +196,9 @@ def main_per_worker():
         return out
 
     param_dicts = [
-        {"params": [p for n, p in model_without_ddp.named_parameters() if "backbone" not in n and p.requires_grad]},
+        {"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]},
         {
-            "params": [p for n, p in model_without_ddp.named_parameters() if "backbone" in n and p.requires_grad],
+            "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
             # "lr": cfg.TRAIN.LR_BACKBONE,
         },
     ] 
@@ -232,34 +239,60 @@ def main_per_worker():
                   sampler=train_sampler
                   )
 
+    # eval_loader = torch.utils.data.DataLoader(
+    #               eval_dataset,
+    #               batch_size=cfg.DATASET.IMG_NUM_PER_GPU,
+    #               shuffle=False,
+    #               drop_last=False,
+    #               collate_fn=collect,
+    #               num_workers=cfg.WORKERS
+    #               )
+
+    # Trainer = get_trainer(
+    #     cfg,
+    #     model,
+    #     criterion=criterion,
+    #     optimizer=optimizer,
+    #     lr_scheduler=lr_scheduler,
+    #     postprocessors=postprocessors,
+    #     log_dir='output',
+    #     performance_indicator='mAP',
+    #     last_iter=last_iter,
+    #     rank=args.rank,
+    #     device=device,
+    #     max_norm=cfg.TRAIN.CLIP_MAX_NORM
+    # )
+
     eval_loader = torch.utils.data.DataLoader(
                   eval_dataset,
-                  batch_size=cfg.DATASET.IMG_NUM_PER_GPU,
+                  batch_size=3,
                   shuffle=False,
                   drop_last=False,
                   collate_fn=collect,
-                  num_workers=cfg.WORKERS
+                  num_workers=0
                   )
 
-    Trainer = get_trainer(
+    module = importlib.import_module(cfg.TRAINER.FILE)
+    Trainer = getattr(module, cfg.TRAINER.NAME)(
         cfg,
-        model,
+        model=model,
         criterion=criterion,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
+        optimizer=None,
+        lr_scheduler=None,
         postprocessors=postprocessors,
-        log_dir='output',
-        performance_indicator='mAP',
-        last_iter=last_iter,
-        rank=args.rank,
+        log_dir=cfg.OUTPUT_ROOT+'/output',
+        performance_indicator=cfg.PI,
+        last_iter=-1,
+        rank=0,
         device=device,
-        max_norm=cfg.TRAIN.CLIP_MAX_NORM
+        max_norm=None
     )
 
     print('Start training...')
 
     while True:            
-        Trainer.train(train_loader, eval_loader, step)
+        # Trainer.train(train_loader, eval_loader, step)
+        Trainer.evaluate(eval_loader, cfg.TEST.MODE)
 
 if __name__ == '__main__':
     main_per_worker()
