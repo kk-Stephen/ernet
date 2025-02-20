@@ -5,7 +5,7 @@ import sys
 import time
 import math
 import copy
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch import nn
 import torch.nn.functional as F

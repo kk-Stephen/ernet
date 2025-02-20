@@ -7,14 +7,14 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import random
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch.utils.data import Dataset
 
 VERB_DICT = {'null':0, 'grasp':1, 'loosen':2, 'hold':16, 'pull':3, 'slack':17, 'cut':4, 'inject':5, 'separate':6, 'rotate':7,
              'seal':8, 'tear':9, 'push':10, 'chop':11, 'aspirate':12, 'wipe':13, 'snip':14, 'insert':18, 'polish':15}
 
-INS_DICT = {'forceps':1, 'incision-knife':2, 'cannula':3, 'capsulorhexis-forceps':4, 'phacoemulsifier':5,
+INS_DICT = {'null':0, 'forceps':1, 'incision-knife':2, 'cannula':3, 'capsulorhexis-forceps':4, 'phacoemulsifier':5,
             'lens-hook':6, 'cotton-swab':7, 'irrigation-aspiration-handpiece':8, 'aspiration-handpiece':9,
             'irrigation-handpiece':10, 'implant-injector':11, 'needle-holder':13, 'scissors':12}
 

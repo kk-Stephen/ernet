@@ -7,7 +7,7 @@ import time
 import json
 from tqdm import tqdm
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch import autograd
 
@@ -177,7 +177,7 @@ class HOITrainer(BaseTrainer):
         print('Training time {}'.format(total_time_str))
         self.epoch += 1
         
-    def evaluate(self, eval_loader, mode, rel_topk=100):
+    def evaluate(self, eval_loader, mode, train_dataset, eval_dataset, rel_topk=100, ):
         self.model.eval() 
         
         if self.pue: 
@@ -208,22 +208,29 @@ class HOITrainer(BaseTrainer):
         result_path = f'{self.cfg.OUTPUT_ROOT}/pred.json'
         write_dict_to_json(results, result_path)
 
-        # eval
-        if mode == 'hico':
-            from eval_tools.hico_eval import hico
-            eval_tool = hico(annotation_file='data/hico/test_hico.json', 
-                             train_annotation='data/hico/trainval_hico.json')
-            mAP = eval_tool.evalution(results)
-        elif mode == 'hoia':
-            from eval_tools.hoia_eval import hoia
-            eval_tool = hoia(annotation_file='data/hoia/test_hoia.json')
-            mAP = eval_tool.evalution(results)
+        # # eval
+        # if mode == 'hico':
+        #     from eval_tools.hico_eval import hico
+        #     eval_tool = hico(annotation_file='data/hico/test_hico.json',
+        #                      train_annotation='data/hico/trainval_hico.json')
+        #     mAP = eval_tool.evalution(results)
+        # elif mode == 'hoia':
+        #     from eval_tools.hoia_eval import hoia
+        #     eval_tool = hoia(annotation_file='data/hoia/test_hoia.json')
+        #     mAP = eval_tool.evalution(results)
+        #
+        # elif mode == 'vcoco':
+        #     from eval_tools.vcoco_eval import vcoco
+        #     eval_tool = vcoco(annotation_file='data/vcoco/test_vcoco.json')
+        #     mAP = eval_tool.evalution(results)
+        # elif mode == 'phacoq':
+        #     from eval_tools.phacoq_eval import hico
+        #     print('mode: phacoq')
+        #     eval_tool = hico(eval_dataset, train_dataset)
+        #     mAP = eval_tool.evalution(results)
+        # else:
+        #     mAP = 0.0
+        #
+        # return mAP
 
-        elif mode == 'vcoco':
-            from eval_tools.vcoco_eval import vcoco
-            eval_tool = vcoco(annotation_file='data/vcoco/test_vcoco.json')
-            mAP = eval_tool.evalution(results)
-        else:
-            mAP = 0.0
-
-        return mAP
+        return 0

@@ -6,7 +6,7 @@ import time
 import math
 import copy
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -29,7 +29,6 @@ class ERNet(nn.Module):
                  backbone, 
                  transformer, 
                  num_classes=dict(
-                     sub_label = 13,
                      obj_labels=91,
                      rel_labels=117
                  ), 
@@ -907,13 +906,14 @@ class PostProcess(nn.Module):
         rel_o_scores, rel_o_ids = torch.max(dist_o, dim=-1)
         hoi_scores = rel_scores * s_scores[rel_s_ids].unsqueeze(-1) * \
             o_scores[rel_o_ids].unsqueeze(-1)
-        print(rel_o_ids)
+        #print(rel_o_ids)
         # exclude non-exist hoi categories of training
         rel_array = torch.from_numpy(np.load(self.rel_array_path)).to(hoi_scores.device)
-        valid_hoi_mask = rel_array[o_clses[rel_o_ids], 1:]
-        print('rel_array: {}'.format(rel_array.shape))
-        print('hoi_scores: {}'.format(hoi_scores.shape))
-        print('valid_hoi_mask: {}'.format(valid_hoi_mask.shape))
+        #valid_hoi_mask = rel_array[o_clses[rel_o_ids], 1:]
+        valid_hoi_mask = rel_array[o_clses[rel_o_ids]]
+        # print('rel_array: {}'.format(rel_array.shape))
+        # print('hoi_scores: {}'.format(hoi_scores.shape))
+        # print('valid_hoi_mask: {}'.format(valid_hoi_mask.shape))
         hoi_scores = (valid_hoi_mask * hoi_scores).reshape(-1, 1)
         hoi_vars = (valid_hoi_mask * hoi_vars).reshape(-1, 1)
         hoi_labels = hoi_labels.reshape(-1, 1)

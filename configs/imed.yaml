@@ -14,10 +14,10 @@ DATASET: # 改成我们的dataset
   ROOT: '/data/wangyi/hico/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
-  IMG_NUM_PER_GPU: 6 # Number of images per GPU for batch processing.
+  IMG_NUM_PER_GPU: 8 # Number of images per GPU for batch processing.
   SUB_NUM_CLASSES: 13 # Subject class
-  OBJ_NUM_CLASSES: 26 # Object class subject + object
-  REL_NUM_CLASSES: 18 # Relationship class
+  OBJ_NUM_CLASSES: 27 # Object class subject + object
+  REL_NUM_CLASSES: 19 # Relationship class 包含null
   MAX_SIZE: 1333
   SCALES: [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
 MODEL:
@@ -89,5 +89,5 @@ TRAIN:
 TEST:
   REL_ARRAY_PATH: /data/wangyi/hico/rel_np.npy
   USE_EMB: TRUE
-  MODE: hico
+  MODE: phacoq
   PUE: False

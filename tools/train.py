@@ -12,7 +12,7 @@ import os
 import importlib
 import numpy as np
 import random
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import pprint
 import torch
 import torch.backends.cudnn as cudnn
@@ -72,6 +72,7 @@ def parse_args():
         help="Modify config options using the command-line",
         default=None,
         nargs=argparse.REMAINDER)
+    parser.add_argument('--action',default='train', help='train or test')
     args = parser.parse_args()
           
     return args
@@ -238,61 +239,63 @@ def main_per_worker():
                   pin_memory=True,
                   sampler=train_sampler
                   )
+    if args.action == 'train':
+        eval_loader = torch.utils.data.DataLoader(
+                      eval_dataset,
+                      batch_size=cfg.DATASET.IMG_NUM_PER_GPU,
+                      shuffle=False,
+                      drop_last=False,
+                      collate_fn=collect,
+                      num_workers=cfg.WORKERS
+                      )
 
-    # eval_loader = torch.utils.data.DataLoader(
-    #               eval_dataset,
-    #               batch_size=cfg.DATASET.IMG_NUM_PER_GPU,
-    #               shuffle=False,
-    #               drop_last=False,
-    #               collate_fn=collect,
-    #               num_workers=cfg.WORKERS
-    #               )
+        Trainer = get_trainer(
+            cfg,
+            model,
+            criterion=criterion,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            postprocessors=postprocessors,
+            log_dir='output',
+            performance_indicator='mAP',
+            last_iter=last_iter,
+            rank=args.rank,
+            device=device,
+            max_norm=cfg.TRAIN.CLIP_MAX_NORM
+        )
+    else:
+        eval_loader = torch.utils.data.DataLoader(
+                      eval_dataset,
+                      batch_size=3,
+                      shuffle=False,
+                      drop_last=False,
+                      collate_fn=collect,
+                      num_workers=0
+                      )
 
-    # Trainer = get_trainer(
-    #     cfg,
-    #     model,
-    #     criterion=criterion,
-    #     optimizer=optimizer,
-    #     lr_scheduler=lr_scheduler,
-    #     postprocessors=postprocessors,
-    #     log_dir='output',
-    #     performance_indicator='mAP',
-    #     last_iter=last_iter,
-    #     rank=args.rank,
-    #     device=device,
-    #     max_norm=cfg.TRAIN.CLIP_MAX_NORM
-    # )
-
-    eval_loader = torch.utils.data.DataLoader(
-                  eval_dataset,
-                  batch_size=3,
-                  shuffle=False,
-                  drop_last=False,
-                  collate_fn=collect,
-                  num_workers=0
-                  )
-
-    module = importlib.import_module(cfg.TRAINER.FILE)
-    Trainer = getattr(module, cfg.TRAINER.NAME)(
-        cfg,
-        model=model,
-        criterion=criterion,
-        optimizer=None,
-        lr_scheduler=None,
-        postprocessors=postprocessors,
-        log_dir=cfg.OUTPUT_ROOT+'/output',
-        performance_indicator=cfg.PI,
-        last_iter=-1,
-        rank=0,
-        device=device,
-        max_norm=None
-    )
+        module = importlib.import_module(cfg.TRAINER.FILE)
+        Trainer = getattr(module, cfg.TRAINER.NAME)(
+            cfg,
+            model=model,
+            criterion=criterion,
+            optimizer=None,
+            lr_scheduler=None,
+            postprocessors=postprocessors,
+            log_dir=cfg.OUTPUT_ROOT+'/output',
+            performance_indicator=cfg.PI,
+            last_iter=-1,
+            rank=0,
+            device=device,
+            max_norm=None
+        )
 
     print('Start training...')
 
-    while True:            
-        # Trainer.train(train_loader, eval_loader, step)
-        Trainer.evaluate(eval_loader, cfg.TEST.MODE)
+    while True:
+        if args.action == 'train':
+            Trainer.train(train_loader, eval_loader, step)
+        else:
+            Trainer.evaluate(eval_loader, cfg.TEST.MODE, train_dataset, eval_dataset)
 
 if __name__ == '__main__':
     main_per_worker()

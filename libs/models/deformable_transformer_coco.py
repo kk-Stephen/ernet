@@ -11,7 +11,7 @@ import copy
 from typing import Optional, List
 import math
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
