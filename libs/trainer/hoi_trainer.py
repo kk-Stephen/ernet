@@ -5,9 +5,10 @@ import numpy as np
 import sys
 import time
 import json
+
+from pyexpat import model
 from tqdm import tqdm
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch import autograd
 
@@ -51,7 +52,6 @@ class HOITrainer(BaseTrainer):
         imgs = data[0]
         targets = data[1]
         outputs = self.model(imgs)
-
         loss_dict = self.criterion(outputs, targets)
         return loss_dict
 
@@ -177,7 +177,7 @@ class HOITrainer(BaseTrainer):
         print('Training time {}'.format(total_time_str))
         self.epoch += 1
         
-    def evaluate(self, eval_loader, mode, train_dataset, eval_dataset, rel_topk=100, ):
+    def evaluate(self, eval_loader, mode, train_dataset, eval_dataset, rel_topk=100):
         self.model.eval() 
         
         if self.pue: 
