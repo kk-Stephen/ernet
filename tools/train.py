@@ -159,7 +159,6 @@ def main_per_worker():
             model, device_ids=[args.gpu],
             find_unused_parameters=True
         )
-        
     else:
         assert proc_rank == 0, ('proc_rank != 0, it will influence '
                                 'the evaluation procedure')
