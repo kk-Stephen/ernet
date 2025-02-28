@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn

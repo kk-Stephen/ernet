@@ -88,11 +88,44 @@ class HOITrainer(BaseTrainer):
         if self.epoch > self.max_epoch:
             logging.info("Optimization is done !")
             sys.exit(0)
+
+        if self.epoch == 23 or self.epoch == 41:
+            if self.epoch < 40:
+                # TODO: 冻结relation相关的权重
+                print("冻结参数")
+                for name, param in self.model.named_parameters():
+                    if 'rel_' in name or 'interaction' in name:  # interaction相关参数匹配
+                        param.requires_grad = False
+            else:
+                for param in self.model.parameters():
+                    param.requires_grad = True
+                print("===== Frozen Parameters (Epoch 41) =====")
+                for name, param in self.model.named_parameters():
+                    if not param.requires_grad:
+                        print(f"[Frozen] {name}")
+                print("======================================")
+
+
         for index, data in enumerate(metric_logger.log_every(train_loader, print_freq, header)):
-            data = self._read_inputs(data)
-            loss_dict = self._forward(data)   
-            weight_dict = self.criterion.weight_dict
-            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+            data = self._read_inputs(data) #把数据解析出来
+            loss_dict = self._forward(data)  #前向传递得到loss
+            #分步式训练
+            # if self.epoch == 25:
+            #     print("===== Frozen Parameters (Epoch 0) =====")
+            #     for name, param in self.model.named_parameters():
+            #         if not param.requires_grad:
+            #             print(f"[Frozen] {name}")
+            #     print("======================================")
+            if self.epoch < 40:
+                weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
+                modified_weight_dict = {k: 0 if 'rel' in k else v for k, v in  self.criterion.weight_dict.items()}
+                losses = sum(loss_dict[k] * modified_weight_dict[k] for k in loss_dict.keys() if k in modified_weight_dict)
+                #print("weight_dict:{}".format(weight_dict))
+                #print("modified_weight_dict:{}".format(modified_weight_dict))
+            else:
+                weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
+                #print("weight_dict:{}".format(weight_dict))
+                losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
             # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = utils.reduce_dict(loss_dict)
@@ -108,10 +141,10 @@ class HOITrainer(BaseTrainer):
                 print("Loss is {}, stopping training".format(loss_value))
                 print(loss_dict_reduced)
                 sys.exit(1)
-
+            #每次反向传播之前需要清除之前的梯度
             self.optimizer.zero_grad()
             losses.backward()
-            if self.max_norm > 0:
+            if self.max_norm > 0: #判断是否需要进行梯度裁剪，为了防止梯度过大
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_norm)
             self.optimizer.step()
 
@@ -122,12 +155,12 @@ class HOITrainer(BaseTrainer):
             metric_logger.update(dr=self.cfg.TRANSFORMER.DROPOUT if step==0 else drop_rate)
 
         # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
+        metric_logger.synchronize_between_processes() #用于同步不同进程之间的指标数据，以便能够正确计算整个训练过程的平均值
         print("Averaged stats:", metric_logger)
         train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': self.epoch}
-        if self.rank == 0:
+        if self.rank == 0: #用于判断当前进程是否为主进程
             for (key, val) in log_stats.items():
                 self.writer.add_scalar(key, val, log_stats['epoch'])
         self.lr_scheduler.step(self.epoch)

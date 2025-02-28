@@ -176,8 +176,8 @@ class hico():
                 iou_i = self.compute_IOU(bbox1, bbox2)
                 iou_mat[i, j] = iou_i
         iou_mat_ov=iou_mat.copy()
-        iou_mat[iou_mat>= 0.5] = 1
-        iou_mat[iou_mat< 0.5] = 0
+        iou_mat[iou_mat >= self.overlap_iou] = 1
+        iou_mat[iou_mat < self.overlap_iou] = 0
 
         match_pairs = np.nonzero(iou_mat)
         match_pairs_dict = {}

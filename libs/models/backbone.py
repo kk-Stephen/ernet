@@ -1,13 +1,12 @@
 from collections import OrderedDict
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import torch.nn.functional as F
 import torchvision
 from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
-
+import urllib.request
 from libs.utils.misc import NestedTensor, is_main_process
 from libs.models.position_encoding import build_position_encoding
 
@@ -96,9 +95,30 @@ class Backbone(BackboneBase):
             out_indices = (2,3,4)
         elif 'convnextv2' in name:
             out_indices = (1,2,3)
-        backbone = timm.create_model(name,
-                                      features_only=True, out_indices=out_indices,
-                                      pretrained=pretrained)
+
+        def check_internet():
+            try:
+                urllib.request.urlopen("https://huggingface.co/", timeout=10)
+                return True
+            except urllib.request.URLError:
+                return False
+        if check_internet():
+            print("Loading weights from Hugging Face...")
+            backbone = timm.create_model(name,
+                                          features_only=True, out_indices=out_indices,
+                                          pretrained=pretrained)
+        else:
+            print("Loading weights from Local...")
+            local_weight_path = f"./backbone_weights/tf_efficientnetv2_s_21ft1k-d7dafa41.pth"
+            if os.path.exists(local_weight_path):
+                print("Find local weights, loading...")
+                pretrained_cfg = timm.models.create_model('tf_efficientnetv2_s').default_cfg
+                pretrained_cfg['file'] = r"./backbone_weights/tf_efficientnetv2_s_21ft1k-d7dafa41.pth"
+                backbone = timm.create_model(name, pretrained_cfg=pretrained_cfg,
+                                             features_only=True, out_indices=out_indices,
+                                             pretrained=True)
+            else:
+                raise FileNotFoundError("No local weights found")
         super().__init__(backbone,name,train_backbone)
 
 class Joiner(nn.Sequential):

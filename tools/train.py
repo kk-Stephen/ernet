@@ -170,10 +170,6 @@ def main_per_worker():
         random.seed(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        # if cfg.DEVICE == 'cuda':
-        #     torch.cuda.set_device(local_rank)
-        # device = torch.device(cfg.DEVICE)
-        # os.environ["CUDA_VISIBLE_DEVICES"] = '1'
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print("Device name:", torch.cuda.get_device_name(0))
         torch.backends.cudnn.enabled = False
@@ -289,10 +285,9 @@ def main_per_worker():
             max_norm=None
         )
 
-    print('Start training...')
-
     while True:
         if args.action == 'train':
+            print('Start training...')
             Trainer.train(train_loader, eval_loader, step)
         else:
             Trainer.evaluate(eval_loader, cfg.TEST.MODE, train_dataset, eval_dataset)

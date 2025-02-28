@@ -7,7 +7,6 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import random
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch.utils.data import Dataset
 
@@ -230,7 +229,7 @@ class QhacoqDataset(Dataset):
                     hico_item["hoi_annotation"].append({
                         'subject_id': sub_id,
                         'object_id': obj_id,
-                        'category_id': [VERB_DICT[ver]]
+                        'category_id': VERB_DICT[ver]
                     })
 
             hico_data.append(hico_item)
@@ -316,10 +315,10 @@ class QhacoqDataset(Dataset):
                 if not isinstance(hoi['category_id'], list):
                     hoi['category_id'] = [hoi['category_id']]
                 hoi_label_np = np.array(hoi['category_id'])
-                if 'vcoco' in self.data_root:
-                    hoi_label_np = hoi_label_np + 1
+                #if 'vcoco' in self.data_root:
+                hoi_label_np = hoi_label_np + 1 #0-based
                 hoi_labels.append(self.multi_dense_to_one_hot(hoi_label_np,
-                                                              self.num_classes_verb + 1))
+                                                              self.num_classes_verb + 1)) #1-based
                 # hoi vectors
                 sub_ct_coord = boxes[hoi['subject_id']][..., :2]
                 obj_ct_coord = boxes[hoi['object_id']][..., :2]

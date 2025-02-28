@@ -922,6 +922,8 @@ class MLP(nn.Module):
             x = self.actf(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+#TODO:其中除了DeformableTransformerDecoder只被instace branch调用，其他要么既被instace branch调用又被interaction branch调用，要么只被interaction调用
+
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 

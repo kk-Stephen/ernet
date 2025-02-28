@@ -6,7 +6,6 @@ import time
 import math
 import copy
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -842,7 +841,7 @@ class PostProcess(nn.Module):
 
     @torch.no_grad()
     def forward(self, outputs_dict, file_name, target_sizes,
-                rel_topk=20, sub_cls=1):
+                rel_topk=20, sub_cls=13):
         """ Perform the matching of postprocess to generate final predicted HOI triplets
         Parameters:
             outputs: raw outputs of the model
@@ -866,14 +865,20 @@ class PostProcess(nn.Module):
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
 
         # parse instance detection results
-        out_bbox = out_bbox * scale_fct[:, None, :]
+        out_bbox = out_bbox * scale_fct[:, None, :] #将尺寸还原
         out_bbox_flat = out_bbox.flatten(0, 1)
         prob = torch.softmax(out_logits, -1)
         scores, labels = prob[..., :-1].max(-1)
         labels_flat = labels.flatten(0, 1) # '(bs * num_queries, )
         scores_flat = scores.flatten(0, 1)
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox_flat)
-        s_idx = torch.where(labels_flat==sub_cls)[0]
+        #s_idx = torch.where(torch.isin(labels_flat, sub_cls))[0] #找出 labels_flat 中所有等于 sub_cls 的元素的位置索引。
+        #must find all valid subject id for multisubject
+        s_idx_list = []
+        for i in range(0,sub_cls):
+              sub_s_idx = torch.where(labels_flat == i)[0]
+              s_idx_list.append(sub_s_idx)
+        s_idx = torch.cat(s_idx_list)
         o_idx = torch.arange(0, len(labels_flat)).long()
         # no detected human or object instances
         if len(s_idx) == 0 or len(o_idx) == 0:
@@ -910,6 +915,7 @@ class PostProcess(nn.Module):
         # exclude non-exist hoi categories of training
         rel_array = torch.from_numpy(np.load(self.rel_array_path)).to(hoi_scores.device)
         #valid_hoi_mask = rel_array[o_clses[rel_o_ids], 1:]
+        #TODO:这种选择valid的方法不一定有效
         valid_hoi_mask = rel_array[o_clses[rel_o_ids]]
         # print('rel_array: {}'.format(rel_array.shape))
         # print('hoi_scores: {}'.format(hoi_scores.shape))
@@ -925,7 +931,8 @@ class PostProcess(nn.Module):
 
         # remove repeated triplets
         hoi_triplet = hoi_triplet[np.argsort(-hoi_triplet[:,-2])]
-        _, hoi_id = np.unique(hoi_triplet[:, [0, 1, 2]], axis=0, return_index=True)
+        # in surgical scene an instrument-tissue pair at most has one interaction
+        _, hoi_id = np.unique(hoi_triplet[:, [0, 1]], axis=0, return_index=True)
         rel_triplet = hoi_triplet[hoi_id]
         if self.use_pue:
             rel_triplet = rel_triplet[np.argsort(-rel_triplet[:,-1])]
@@ -935,13 +942,14 @@ class PostProcess(nn.Module):
         # save topk hoi triplets
         rel_topk = min(rel_topk, len(rel_triplet))
         rel_triplet = rel_triplet[:rel_topk]
+        #print(f'rel_triplet: {rel_triplet}')
         hoi_labels, hoi_scores = rel_triplet[..., 2], rel_triplet[..., 3]
         rel_s_ids, rel_o_ids = np.array(rel_triplet[..., 0], dtype=np.int64), np.array(rel_triplet[..., 1], dtype=np.int64)
         sub_boxes, obj_boxes = s_boxes.cpu().numpy()[rel_s_ids], o_boxes.cpu().numpy()[rel_o_ids]
         sub_clses, obj_clses = s_clses.cpu().numpy()[rel_s_ids], o_clses.cpu().numpy()[rel_o_ids]
         sub_scores, obj_scores = s_scores.cpu().numpy()[rel_s_ids], o_scores.cpu().numpy()[rel_o_ids]
         self.end_time = time.time()
-        
+
         # wtite to files
         pred_out = {}
         pred_out['file_name'] = file_name
@@ -972,6 +980,67 @@ class PostProcess(nn.Module):
                 'score': obj_scores[i]
             }
             pred_out['predictions'].append(det_dict)
+
+
+        # 合并所有涉及的检测框并去重
+        # all_boxes = np.concatenate([sub_boxes, obj_boxes], axis=0)
+        # all_clses = np.concatenate([sub_clses, obj_clses], axis=0)
+        # all_scores = np.concatenate([sub_scores, obj_scores], axis=0)
+        #
+        # # 基于bbox、类别和分数去重
+        # rounded_boxes = np.round(all_boxes, 4)
+        # dt = np.dtype([
+        #     ('bbox', np.float32, (4,)),
+        #     ('category_id', np.int64),
+        #     ('score', np.float32)
+        # ])
+        # structured_array = np.zeros(len(rounded_boxes), dtype=dt)
+        # structured_array['bbox'] = rounded_boxes
+        # structured_array['category_id'] = all_clses
+        # structured_array['score'] = np.round(all_scores, 4)
+        # _, unique_indices = np.unique(structured_array, return_index=True)
+        #
+        # # 提取唯一实例
+        # unique_boxes = all_boxes[unique_indices]
+        # unique_clses = all_clses[unique_indices]
+        # unique_scores = all_scores[unique_indices]
+        #
+        # # 构建预测结果
+        # pred_out = {'file_name': file_name, 'hoi_prediction': [], 'predictions': []}
+        # for idx in range(len(unique_boxes)):
+        #     pred_out['predictions'].append({
+        #         'bbox': unique_boxes[idx].tolist(),
+        #         'category_id': int(unique_clses[idx]),
+        #         'score': float(unique_scores[idx])
+        #     })
+        #
+        # # 建立框到唯一ID的映射
+        # box_to_id = {}
+        # for i, idx in enumerate(unique_indices):
+        #     key = (tuple(rounded_boxes[idx]), all_clses[idx], np.round(all_scores[idx], 4))
+        #     box_to_id[key] = i
+        #
+        # # 构建HOI预测
+        # for i in range(len(rel_triplet)):
+        #     subj_box = np.round(sub_boxes[i], 4)
+        #     subj_cls = sub_clses[i]
+        #     subj_score = np.round(sub_scores[i], 4)
+        #     obj_box = np.round(obj_boxes[i], 4)
+        #     obj_cls = obj_clses[i]
+        #     obj_score = np.round(obj_scores[i], 4)
+        #
+        #     subj_key = (tuple(subj_box), subj_cls, subj_score)
+        #     obj_key = (tuple(obj_box), obj_cls, obj_score)
+        #     subj_id = box_to_id.get(subj_key, -1)
+        #     obj_id = box_to_id.get(obj_key, -1)
+        #
+        #     if subj_id != -1 and obj_id != -1:
+        #         pred_out['hoi_prediction'].append({
+        #             'subject_id': subj_id,
+        #             'object_id': obj_id,
+        #             'category_id': hoi_labels[i],
+        #             'score': hoi_scores[i]
+        #         })
         return pred_out 
 
 
