@@ -11,7 +11,7 @@ CUDNN:
 DATASET: # 改成我们的dataset
   FILE: phacoq
   NAME: QhacoqDataset
-  ROOT: '/data/wangyi/hico/'
+  ROOT: '/data/wangyi/data/phacoq/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 8 # Number of images per GPU for batch processing.
@@ -23,7 +23,7 @@ DATASET: # 改成我们的dataset
 MODEL:
   FILE: ernet
   NAME: ERNet_HICO
-  RESUME_PATH: '/data/wangyi/wangyi_code/ernet/output/ERNet_hico_ERNet_HICO_epoch100_checkpoint.pth'
+  RESUME_PATH: '/data/wangyi/wangyi_code/ernet/output/_ERNet_HICO_epoch023_checkpoint.pth'
 BACKBONE:
   NAME: tf_efficientnetv2_s.in21k_ft_in1k
   DIALATION: False
@@ -78,7 +78,7 @@ TRAIN:
   WARMUP_STEP: 5
   WARMUP_EPOCH: 0
   LR_DROP: [60,80]
-  MAX_EPOCH: 100
+  MAX_EPOCH: 200
   PL_STAGE: [0,10,20,30,40]
   PRINT_FREQ: 20
   SAVE_INTERVAL: 1
@@ -87,7 +87,7 @@ TRAIN:
   CLIP_MAX_NORM: 0.1
   RESUME: False
 TEST:
-  REL_ARRAY_PATH: /data/wangyi/hico/rel_np.npy
-  USE_EMB: TRUE
+  REL_ARRAY_PATH: /data/wangyi/data/phacoq/rel_np.npy
+  USE_EMB: True
   MODE: phacoq
   PUE: False

@@ -16,7 +16,7 @@ from libs.datasets.collate import collect
 from libs.datasets.transform import EvalTransform
 from libs.utils.utils import get_model
 from libs.utils.utils import list_to_set
-
+torch.backends.cudnn.enabled = False
 def parse_args():
     parser = argparse.ArgumentParser(description='HOI Detection Task')
     parser.add_argument(
@@ -46,7 +46,6 @@ def main_per_worker():
     logging.basicConfig(filename=f'{cfg.OUTPUT_ROOT}/eval.log', level=logging.INFO)
     
     # model
-    module = importlib.import_module(cfg.MODEL.FILE)
     # model, criterion, postprocessors = getattr(module, 'build_model')(cfg, device)
     model, criterion, postprocessors = get_model(cfg, device)
     # model = torch.jit.script(model)
@@ -60,15 +59,38 @@ def main_per_worker():
     print('number of params:', n_parameters)
     # load model checkpoints
     resume_path = cfg.MODEL.RESUME_PATH
-    print(cfg.MODEL.RESUME_PATH)
     if os.path.exists(resume_path):
         checkpoint = torch.load(resume_path, map_location='cpu')
+        # pretrained_dict = checkpoint['state_dict']
+        # model_dict = model.state_dict()
+        #
+        # allowed_prefixes = ["backbone", "transformer.encoder"]
+        # allowed_keys = [
+        #     "transformer.level_embed",
+        #     "transformer.det_token",
+        #     "transformer.rel_det_token",
+        #     "transformer.det_pos_embed",
+        #     "transformer.rel_det_pos_embed"
+        # ]
+        #
+        # # 筛选出模型中存在且形状匹配，同时满足条件的权重
+        # loadable_dict = {
+        #     k: v for k, v in pretrained_dict.items()
+        #     if k in model_dict and v.size() == model_dict[k].size() and
+        #        (any(k.startswith(prefix) for prefix in allowed_prefixes) or k in allowed_keys)
+        # }
+        # # 记录加载的层数
+        # num_loaded = len(loadable_dict)
+        # # 更新模型的权重字典，并加载
+        # model_dict.update(loadable_dict)
+        # model.load_state_dict(model_dict)
         # resume
         if 'state_dict' in checkpoint:
             #model.module.load_state_dict(checkpoint['state_dict'], strict=True)
             model.load_state_dict(checkpoint['state_dict'], strict=True)
             logging.info(f'==> model pretrained from {resume_path}')
             print("Load successfully from {}".format(resume_path))
+
 
     # ONNX
     # ONNX_FILE_PATH = resume_path.replace('pth','onnx')
@@ -79,6 +101,7 @@ def main_per_worker():
     # get datset
     module = importlib.import_module(cfg.DATASET.FILE)
     Dataset = getattr(module, cfg.DATASET.NAME)
+    print(f'dataset:{Dataset}')
     data_root = os.path.join(cfg.DATASET.ROOT, 'test')
     if not os.path.exists(data_root):
         logging.info(f'==> Cannot found data: {data_root}')
@@ -102,15 +125,16 @@ def main_per_worker():
     eval_dataset = list_to_set(eval_list, 'eval')
     if eval_dataset is not None:
         logging.info(f'==> the size of eval dataset is {len(eval_dataset)}')
+
     eval_loader = torch.utils.data.DataLoader(
         eval_dataset,
-        batch_size=3,
+        batch_size=1,
         shuffle=False,
         drop_last=False,
         collate_fn=collect,
         num_workers=0
     )
-    
+
     # start evaluate in Trainer
     module = importlib.import_module(cfg.TRAINER.FILE)
     Trainer = getattr(module, cfg.TRAINER.NAME)(
@@ -129,8 +153,8 @@ def main_per_worker():
     )
     logging.info(f'==> start eval...')
     
-    assert cfg.TEST.MODE in ['hico', 'hoia', 'vcoco', 'ahoi']
-    Trainer.train(eval_loader, eval_loader, 0)
+    assert cfg.TEST.MODE in ['hico', 'hoia', 'vcoco', 'ahoi', 'phacoq']
+    Trainer.evaluate(eval_loader, cfg.TEST.MODE, eval_dataset, eval_dataset)
     #Trainer.evaluate(eval_loader, cfg.TEST.MODE)
 
 

@@ -6,15 +6,15 @@
 from __future__ import division
 from __future__ import print_function
 from __future__ import with_statement
-
+import logging
 import argparse
 import os
 import importlib
 import numpy as np
 import random
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import pprint
 import torch
+from torch.cuda.amp import GradScaler
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 
@@ -30,6 +30,7 @@ from libs.utils.utils import get_dataset
 from libs.utils.utils import get_trainer
 from libs.utils.utils import load_checkpoint
 from libs.utils.utils import get_lr_scheduler
+
 
 from madgrad import MADGRAD
 from lion import Lion
@@ -73,6 +74,7 @@ def parse_args():
         default=None,
         nargs=argparse.REMAINDER)
     parser.add_argument('--action',default='train', help='train or test')
+    parser.add_argument('--pre_trained', default=None, help='pretrain_path')
     args = parser.parse_args()
           
     return args
@@ -213,10 +215,41 @@ def main_per_worker():
     print('Using the {} optimizer'.format(optimizer.__class__.__name__))
     
     lr_scheduler = get_lr_scheduler(cfg, optimizer, cfg.TRAIN.MAX_EPOCH)
-
     last_iter=-1
+    if args.pre_trained is not None:
+        if os.path.exists(args.pre_trained):
+            checkpoint = torch.load(args.pre_trained, map_location='cpu')
+            pretrained_dict = checkpoint['state_dict']
+            model_dict = model.state_dict()
+
+            allowed_prefixes = ["backbone", "transformer.encoder"]
+            allowed_keys = [
+                "transformer.level_embed",
+                "transformer.det_token",
+                "transformer.rel_det_token",
+                "transformer.det_pos_embed",
+                "transformer.rel_det_pos_embed"
+            ]
+
+            # 筛选出模型中存在且形状匹配，同时满足条件的权重
+            loadable_dict = {
+                k: v for k, v in pretrained_dict.items()
+                if k in model_dict and v.size() == model_dict[k].size() and
+                   (any(k.startswith(prefix) for prefix in allowed_prefixes) or k in allowed_keys)
+            }
+            # 记录加载的层数
+            num_loaded = len(loadable_dict)
+            # 更新模型的权重字典，并加载
+            model_dict.update(loadable_dict)
+            model.load_state_dict(model_dict)
+            # model.load_state_dict(checkpoint['state_dict'], strict=False)
+            logging.info(f'==> Successfully loaded {num_loaded} layers from {args.pre_trained}')
+        else:
+            logging.error(f"==> checkpoint do not exists: \"{args.pre_trained}\"")
+            raise FileNotFoundError
 
     step=0
+
     if cfg.TRAIN.RESUME:
         model, optimizer, lr_scheduler, last_iter = load_checkpoint(cfg, model,
             optimizer, lr_scheduler, device)
@@ -261,7 +294,7 @@ def main_per_worker():
     else:
         eval_loader = torch.utils.data.DataLoader(
                       eval_dataset,
-                      batch_size=3,
+                      batch_size=cfg.DATASET.IMG_NUM_PER_GPU,
                       shuffle=False,
                       drop_last=False,
                       collate_fn=collect,

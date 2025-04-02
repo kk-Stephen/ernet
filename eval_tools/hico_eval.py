@@ -51,6 +51,10 @@ class hico():
             else:
                 self.c_inds.append(id)
         self.num_class = len(self.verb_name_dict)
+        print('self.num_class', self.num_class)
+        print('self.verb_name_dict', self.verb_name_dict)
+        print('sum_gt', self.sum_gt)
+        print('train_sum', self.train_sum)
 
     def evalution(self, predict_annot):
         for pred_i in predict_annot:
@@ -59,8 +63,10 @@ class hico():
             gt_i = self.annotations[self.file_name.index(pred_i['file_name'])]
             gt_bbox = gt_i['annotations']
             if len(gt_bbox)!=0:
-                pred_bbox = self.add_One(pred_i['predictions']) #convert zero-based to one-based indices
+                #pred_bbox = self.add_One(pred_i['predictions']) #convert zero-based to one-based indices
+                pred_bbox = pred_i['predictions']
                 bbox_pairs, bbox_ov = self.compute_iou_mat(gt_bbox, pred_bbox)
+                #print(f"filename{pred_i['file_name']},bbox_pairs{bbox_pairs}, bbox_ov{bbox_ov}")
                 pred_hoi = pred_i['hoi_prediction']
                 gt_hoi = gt_i['hoi_annotation']
                 self.compute_fptp(pred_hoi, gt_hoi, bbox_pairs, pred_bbox,bbox_ov)
@@ -105,7 +111,7 @@ class hico():
             max_recall[i] = np.max(rec)
             total_rec.append(rec)
             total_prec.append(prec)
-
+        print('ap',ap)
         mAP = np.mean(ap[:])
         mAP_rare = np.mean(ap[self.r_inds])
         mAP_nonrare = np.mean(ap[self.c_inds])
@@ -151,6 +157,7 @@ class hico():
                                 max_ov=min_ov_gt
                                 max_gt_id=gt_id
                 triplet = [pred_bbox[pred_hoi_i['subject_id']]['category_id'], pred_bbox[pred_hoi_i['object_id']]['category_id'], pred_hoi_i['category_id']]
+                # print(triplet)
                 if triplet not in self.verb_name_dict:
                     continue
                 verb_id = self.verb_name_dict.index(triplet)

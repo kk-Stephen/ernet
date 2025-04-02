@@ -9,12 +9,13 @@ import os
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+from collections import defaultdict
 from scipy.spatial.distance import cdist
 from libs.models.backbone import build_backbone
 from libs.models.matcher import build_matcher
 from libs.models.deformable_transformer import build_deformable_transformer
 from libs.utils import box_ops
+from libs.utils.utils import nms
 from libs.utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                              accuracy, get_world_size, interpolate,
                              is_dist_avail_and_initialized, inverse_sigmoid)
@@ -215,7 +216,7 @@ class ERNet(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
             rel_query_embeds = self.rel_query_embed.weight
-
+        #hs，hs_inter_references，rel_hs，rel_hs_inter_references都是每一层的输出
         (hs, hs_init_reference, hs_inter_references, 
         rel_hs, rel_hs_init_reference, rel_hs_inter_references, 
         enc_outputs_class, enc_outputs_coord_unact,
@@ -867,8 +868,10 @@ class PostProcess(nn.Module):
         # parse instance detection results
         out_bbox = out_bbox * scale_fct[:, None, :] #将尺寸还原
         out_bbox_flat = out_bbox.flatten(0, 1)
+        #print(f'out_bbox_flat:{out_bbox_flat}')
         prob = torch.softmax(out_logits, -1)
         scores, labels = prob[..., :-1].max(-1)
+        #print(f'scores: {scores}, labels: {labels}')
         labels_flat = labels.flatten(0, 1) # '(bs * num_queries, )
         scores_flat = scores.flatten(0, 1)
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox_flat)
@@ -891,7 +894,9 @@ class PostProcess(nn.Module):
         s_cetr = box_ops.box_xyxy_to_cxcywh(boxes[s_idx])[..., :2]
         o_cetr = box_ops.box_xyxy_to_cxcywh(boxes[o_idx])[..., :2]
         s_boxes, s_clses, s_scores = boxes[s_idx], labels_flat[s_idx], scores_flat[s_idx]
+        s_avi_idxs = nms(s_boxes.cpu().numpy(), s_clses.cpu().numpy(), s_scores.cpu().numpy())
         o_boxes, o_clses, o_scores = boxes[o_idx], labels_flat[o_idx], scores_flat[o_idx]
+        o_avi_idxs = nms(o_boxes.cpu().numpy(), o_clses.cpu().numpy(), o_scores.cpu().numpy())
         s_emb, o_emb = id_emb[s_idx], id_emb[o_idx]
 
         # parse interaction detection results
@@ -922,17 +927,27 @@ class PostProcess(nn.Module):
         # print('valid_hoi_mask: {}'.format(valid_hoi_mask.shape))
         hoi_scores = (valid_hoi_mask * hoi_scores).reshape(-1, 1)
         hoi_vars = (valid_hoi_mask * hoi_vars).reshape(-1, 1)
+        # hoi_scores = hoi_scores.reshape(-1, 1)
+        # hoi_vars = hoi_vars.reshape(-1, 1)
         hoi_labels = hoi_labels.reshape(-1, 1)
+        #print(hoi_labels)
         rel_s_ids = rel_s_ids.unsqueeze(-1).repeat(1, topk).reshape(-1, 1)
+        #print(f'rel_s_ids:{rel_s_ids}')
         rel_o_ids = rel_o_ids.unsqueeze(-1).repeat(1, topk).reshape(-1, 1)
+        #print(f'rel_o_ids:{rel_o_ids}')
         hoi_triplet = (torch.cat((rel_s_ids.float(), rel_o_ids.float(), hoi_labels.float(),
             hoi_scores.float(), hoi_vars.float()), 1)).cpu().numpy()
         hoi_triplet = hoi_triplet[hoi_triplet[..., -2]>0.0]
-
         # remove repeated triplets
         hoi_triplet = hoi_triplet[np.argsort(-hoi_triplet[:,-2])]
         # in surgical scene an instrument-tissue pair at most has one interaction
-        _, hoi_id = np.unique(hoi_triplet[:, [0, 1]], axis=0, return_index=True)
+        #_, hoi_id = np.unique(hoi_triplet[:, [0, 1]], axis=0, return_index=True)
+        #mask = np.isin(hoi_triplet[:, 0], s_avi_idxs) & np.isin(hoi_triplet[:, 1], o_avi_idxs)
+        #filtered_triplet = hoi_triplet[mask]
+        # _, unique_idx = np.unique(filtered_triplet[:, 2], return_index=True)
+        #_, unique_idx = np.unique(filtered_triplet[:, [0, 1, 2]], axis=0, return_index=True)
+        #rel_triplet = filtered_triplet[unique_idx]
+        _, hoi_id = np.unique(hoi_triplet[:, [0, 1, 2]], axis=0, return_index=True)
         rel_triplet = hoi_triplet[hoi_id]
         if self.use_pue:
             rel_triplet = rel_triplet[np.argsort(-rel_triplet[:,-1])]
@@ -961,7 +976,7 @@ class PostProcess(nn.Module):
             hoi_dict = {
                 'subject_id': sid,
                 'object_id': oid,
-                'category_id': hoi_labels[i],
+                'category_id': hoi_labels[i] -1.0,
                 'score': hoi_scores[i]
             }
             pred_out['hoi_prediction'].append(hoi_dict)

@@ -236,8 +236,6 @@ class QhacoqDataset(Dataset):
         if object_category_ids:
             min_category_id = min(object_category_ids)
             max_category_id = max(object_category_ids)
-            print(f"目标物体类别的最小 category_id: {min_category_id}")
-            print(f"目标物体类别的最大 category_id: {max_category_id}")
         self.hoi_annotations = hico_data
 
 
@@ -316,7 +314,7 @@ class QhacoqDataset(Dataset):
                     hoi['category_id'] = [hoi['category_id']]
                 hoi_label_np = np.array(hoi['category_id'])
                 #if 'vcoco' in self.data_root:
-                hoi_label_np = hoi_label_np + 1 #0-based
+                # hoi_label_np = hoi_label_np + 1 #0-based
                 hoi_labels.append(self.multi_dense_to_one_hot(hoi_label_np,
                                                               self.num_classes_verb + 1)) #1-based
                 # hoi vectors

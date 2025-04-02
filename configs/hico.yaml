@@ -1,6 +1,6 @@
-OUTPUT_ROOT: ERNet_hico
+OUTPUT_ROOT: '/data/wangyi/wangyi_code/ernet-main/eval_log/'
 DIST_BACKEND: 'nccl'
-WORKERS: 24
+WORKERS: 12
 DEVICE: cuda
 SEED: 42
 PI: mAP
@@ -11,10 +11,10 @@ CUDNN:
 DATASET:
   FILE: hico_det
   NAME: HICODetDataset
-  ROOT: '/home/cyphi02/Marcus/ERNet/data/hico/'
+  ROOT: '/data/wangyi/data/hico/images/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
-  IMG_NUM_PER_GPU: 3
+  IMG_NUM_PER_GPU: 2
   SUB_NUM_CLASSES: 1
   OBJ_NUM_CLASSES: 91
   REL_NUM_CLASSES: 117
@@ -42,15 +42,15 @@ TRANSFORMER:
   NUM_FEATURE_LEVELS: 3
   DEC_N_POINTS: 4
   ENC_N_POINTS: 4
-  WITH_BOX_REFINE: True 
-  TWO_STAGE: True 
+  WITH_BOX_REFINE: True
+  TWO_STAGE: True
 MATCHER:
   COST_CLASS: 1
   COST_BBOX: 5
   COST_CIOU: 2
-LOSS: 
+LOSS:
   AUX_LOSS: True
-  IOU_AWARE: True 
+  IOU_AWARE: True
   IOU_AWARE_COEF: 2
   DICE_LOSS_COEF: 1
   REL_CLS_COEF: 1
@@ -84,9 +84,9 @@ TRAIN:
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1
-  RESUME: False 
+  RESUME: False
 TEST:
-  REL_ARRAY_PATH: /home/cyphi02/Marcus/ERNet/data/hico/rel_np.npy
+  REL_ARRAY_PATH: '/data/wangyi/data/hico/rel_np.npy'
   USE_EMB: TRUE
   MODE: hico
   PUE: False

@@ -537,7 +537,7 @@ def get_dataset(cfg, step):
     eval_set = []
     if len(eval_set) == 0:
         eval_set = ['.']
-    eval_list = []      
+    eval_list = []
     for sub_set in eval_set:
         eval_sub_root = osp.join(eval_root, sub_set)
         logging.info(f'==> load val sub set: {eval_sub_root}')
@@ -617,3 +617,54 @@ def write_dict_to_json(mydict, f_path):
     with open(f_path, 'w') as f:
         json.dump(mydict, f, cls=DateEnconding)
         print("write down det dict to %s!" %(f_path))
+
+def compute_iou(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter_w = max(0, x2 - x1)
+    inter_h = max(0, y2 - y1)
+    inter_area = inter_w * inter_h
+
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    union_area = area1 + area2 - inter_area
+    if union_area == 0:
+        return 0
+    return inter_area / union_area
+
+
+def nms(s_boxes, s_clses, s_scores, iou_threshold=0.5):
+    """
+    非极大值抑制：
+    对于同一类别的s_boxes，如果两个框的IoU大于50%，只保留分数最高的那个。
+    返回保留框的索引列表。
+    """
+    s_idxs = []  # 用来保存最终保留的索引
+
+    # 获取所有唯一的类别
+    unique_classes = set(s_clses)
+
+    # 针对每个类别单独做NMS
+    for cls in unique_classes:
+        cls_indices = [i for i, c in enumerate(s_clses) if c == cls]
+        # 根据分数降序排列
+        cls_indices.sort(key=lambda i: s_scores[i], reverse=True)
+
+        while cls_indices:
+            # 选择分数最高的框
+            current = cls_indices.pop(0)
+            s_idxs.append(current)
+            remove_idxs = []
+
+            # 比较剩余框与当前框的重叠程度
+            for idx in cls_indices:
+                if compute_iou(s_boxes[current], s_boxes[idx]) > iou_threshold:
+                    remove_idxs.append(idx)
+
+            # 剔除重叠度超过阈值的框
+            cls_indices = [idx for idx in cls_indices if idx not in remove_idxs]
+
+    return s_idxs

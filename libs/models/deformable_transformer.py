@@ -336,12 +336,12 @@ class InteractionTransformer(nn.Module):
         # refine the feature sequence using encoder
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
 
-        # [DET] and [REL] Token Generation
+        # [DET] and [REL] Token Generation #论文中的query
         bs, _, c = memory.shape
-        det_token = self.det_token.expand(bs, -1, -1) + self.det_pos_embed.expand(bs, -1, -1)
+        det_token = self.det_token.expand(bs, -1, -1) + self.det_pos_embed.expand(bs, -1, -1) #初始化token,相当于cls token.
         rel_token = self.rel_det_token.expand(bs, -1, -1) + self.rel_det_pos_embed.expand(bs, -1, -1)
         tokens = torch.cat([det_token, memory], dim=1)
-        tgt = self.det_attn_blocks(tokens)[:, :self.two_stage_num_proposals]
+        tgt = self.det_attn_blocks(tokens)[:, :self.two_stage_num_proposals] #通过 cross-attention 与 memory 交互， 并只提取top k个token
         tokens = torch.cat([rel_token, memory], dim=1)
         rel_tgt = self.rel_attn_blocks(tokens)[:, :self.two_stage_rel_num_proposals]
 
@@ -349,10 +349,12 @@ class InteractionTransformer(nn.Module):
 
             # Hack implementation for instance and interaction prediction heads 
             # of Efficient DETR
+            # self.decoder.bbox_embed 是一个长度为 num_layers + 1 的 ModuleList
+            # 前 num_layers 个元素：用于 decoder 的每一层；第 num_layers 个（也就是最后一个）元素：不是给 decoder 用的，而是专门留出来给 encoder proposals 用的；
             enc_outputs_class, _ = self.decoder.class_embed[self.decoder.num_layers](tgt,self.training)
             rel_enc_outputs_class, _ = self.decoder.rel_class_embed[self.decoder.num_layers](rel_tgt,self.training)
             enc_outputs_coord_unact = self.decoder.bbox_embed[self.decoder.num_layers](tgt,self.training) 
-            rel_enc_outputs_coord_unact = self.decoder.rel_bbox_embed[self.decoder.num_layers](rel_tgt,self.training) 
+            rel_enc_outputs_coord_unact = self.decoder.rel_bbox_embed[self.decoder.num_layers](rel_tgt,self.training)
             enc_rel_id_embed = self.decoder.rel_id_embed[self.decoder.num_layers](tgt,self.training)
             enc_src_embed = self.decoder.rel_src_embed[self.decoder.num_layers](rel_tgt,self.training)
             enc_dst_embed = self.decoder.rel_dst_embed[self.decoder.num_layers](rel_tgt,self.training)

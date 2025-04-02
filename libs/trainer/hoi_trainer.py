@@ -5,7 +5,7 @@ import numpy as np
 import sys
 import time
 import json
-
+import csv
 from pyexpat import model
 from tqdm import tqdm
 import os
@@ -89,21 +89,21 @@ class HOITrainer(BaseTrainer):
             logging.info("Optimization is done !")
             sys.exit(0)
 
-        if self.epoch == 23 or self.epoch == 41:
-            if self.epoch < 40:
-                # TODO: 冻结relation相关的权重
-                print("冻结参数")
-                for name, param in self.model.named_parameters():
-                    if 'rel_' in name or 'interaction' in name:  # interaction相关参数匹配
-                        param.requires_grad = False
-            else:
-                for param in self.model.parameters():
-                    param.requires_grad = True
-                print("===== Frozen Parameters (Epoch 41) =====")
-                for name, param in self.model.named_parameters():
-                    if not param.requires_grad:
-                        print(f"[Frozen] {name}")
-                print("======================================")
+        # if self.epoch == 23 or self.epoch == 41:
+        #     if self.epoch < 40:
+        #         # TODO: 冻结relation相关的权重
+        #         print("冻结参数")
+        #         for name, param in self.model.named_parameters():
+        #             if 'rel_' in name or 'interaction' in name:  # interaction相关参数匹配
+        #                 param.requires_grad = False
+        #     else:
+        #         for param in self.model.parameters():
+        #             param.requires_grad = True
+        #         print("===== Frozen Parameters (Epoch 41) =====")
+        #         for name, param in self.model.named_parameters():
+        #             if not param.requires_grad:
+        #                 print(f"[Frozen] {name}")
+        #         print("======================================")
 
 
         for index, data in enumerate(metric_logger.log_every(train_loader, print_freq, header)):
@@ -116,16 +116,16 @@ class HOITrainer(BaseTrainer):
             #         if not param.requires_grad:
             #             print(f"[Frozen] {name}")
             #     print("======================================")
-            if self.epoch < 40:
-                weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
-                modified_weight_dict = {k: 0 if 'rel' in k else v for k, v in  self.criterion.weight_dict.items()}
-                losses = sum(loss_dict[k] * modified_weight_dict[k] for k in loss_dict.keys() if k in modified_weight_dict)
-                #print("weight_dict:{}".format(weight_dict))
-                #print("modified_weight_dict:{}".format(modified_weight_dict))
-            else:
-                weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
-                #print("weight_dict:{}".format(weight_dict))
-                losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+            # if self.epoch < 40:
+            #     weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
+            #     modified_weight_dict = {k: 0 if 'rel' in k else v for k, v in  self.criterion.weight_dict.items()}
+            #     losses = sum(loss_dict[k] * modified_weight_dict[k] for k in loss_dict.keys() if k in modified_weight_dict)
+            #     #print("weight_dict:{}".format(weight_dict))
+            #     #print("modified_weight_dict:{}".format(modified_weight_dict))
+            # else:
+            weight_dict = self.criterion.weight_dict  # dict containing as key the names of the losses and as values their relative weight.
+            #print("weight_dict:{}".format(weight_dict))
+            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
             # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = utils.reduce_dict(loss_dict)
@@ -163,6 +163,13 @@ class HOITrainer(BaseTrainer):
         if self.rank == 0: #用于判断当前进程是否为主进程
             for (key, val) in log_stats.items():
                 self.writer.add_scalar(key, val, log_stats['epoch'])
+                csv_path = os.path.join(self.log_dir, 'epoch_losses.csv')
+                file_exists = os.path.exists(csv_path)
+                with open(csv_path, mode='a', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=log_stats.keys())
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerow(log_stats)
         self.lr_scheduler.step(self.epoch)
 
         # save checkpoint
@@ -210,12 +217,12 @@ class HOITrainer(BaseTrainer):
         print('Training time {}'.format(total_time_str))
         self.epoch += 1
         
-    def evaluate(self, eval_loader, mode, train_dataset, eval_dataset, rel_topk=100):
-        self.model.eval() 
-        
-        if self.pue: 
-            self.model.module.transformer.decoder.class_embed.train()
-            self.model.module.transformer.decoder.rel_class_embed.train()
+    def evaluate(self, eval_loader, mode, train_dataset, eval_dataset, rel_topk=100,):
+        self.model.eval()
+
+        if self.pue:
+            self.model.transformer.decoder.class_embed.train()
+            self.model.transformer.decoder.rel_class_embed.train()
 
         results = []
         count = 0
@@ -224,6 +231,7 @@ class HOITrainer(BaseTrainer):
             if data is None:
                 print('dataset is empty')
             imgs, targets, filenames = data
+            #print(f'filename:{filenames}')
             imgs = [img.to(self.device) for img in imgs]
             # targets are list type
             targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
@@ -240,30 +248,31 @@ class HOITrainer(BaseTrainer):
         # save the result
         result_path = f'{self.cfg.OUTPUT_ROOT}/pred.json'
         write_dict_to_json(results, result_path)
+        # with open(result_path, 'r') as file:
+        #       results = json.load(file)
 
-        # # eval
-        # if mode == 'hico':
-        #     from eval_tools.hico_eval import hico
-        #     eval_tool = hico(annotation_file='data/hico/test_hico.json',
-        #                      train_annotation='data/hico/trainval_hico.json')
-        #     mAP = eval_tool.evalution(results)
-        # elif mode == 'hoia':
-        #     from eval_tools.hoia_eval import hoia
-        #     eval_tool = hoia(annotation_file='data/hoia/test_hoia.json')
-        #     mAP = eval_tool.evalution(results)
-        #
-        # elif mode == 'vcoco':
-        #     from eval_tools.vcoco_eval import vcoco
-        #     eval_tool = vcoco(annotation_file='data/vcoco/test_vcoco.json')
-        #     mAP = eval_tool.evalution(results)
-        # elif mode == 'phacoq':
-        #     from eval_tools.phacoq_eval import hico
-        #     print('mode: phacoq')
-        #     eval_tool = hico(eval_dataset, train_dataset)
-        #     mAP = eval_tool.evalution(results)
-        # else:
-        #     mAP = 0.0
-        #
-        # return mAP
+        # eval
+        if mode == 'hico':
+            from eval_tools.hico_eval import hico
+            eval_tool = hico(annotation_file='data/hico/test_hico.json',
+                             train_annotation='data/hico/trainval_hico.json')
+            mAP = eval_tool.evalution(results)
+        elif mode == 'hoia':
+            from eval_tools.hoia_eval import hoia
+            eval_tool = hoia(annotation_file='data/hoia/test_hoia.json')
+            mAP = eval_tool.evalution(results)
 
-        return 0
+        elif mode == 'vcoco':
+            from eval_tools.vcoco_eval import vcoco
+            eval_tool = vcoco(annotation_file='data/vcoco/test_vcoco.json')
+            mAP = eval_tool.evalution(results)
+        elif mode == 'phacoq':
+            from eval_tools.hico_eval import hico
+            print('mode: phacoq')
+            eval_tool = hico(annotation_file='/data/wangyi/wangyi_code/ernet/test.json',
+                             train_annotation='/data/wangyi/wangyi_code/ernet/train.json')
+            mAP = eval_tool.evalution(results)
+        else:
+            mAP = 0.0
+
+        return mAP
