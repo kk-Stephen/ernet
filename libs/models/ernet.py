@@ -19,6 +19,7 @@ from libs.utils.utils import nms
 from libs.utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                              accuracy, get_world_size, interpolate,
                              is_dist_avail_and_initialized, inverse_sigmoid)
+import torchvision
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -295,6 +296,15 @@ class ERNet(nn.Module):
             'pred_rel': rel_out
         }      
 
+        if self.aux_loss:
+            output['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
+                outputs_rel_class, outputs_rel_coord, id_emb, src_emb, dst_emb, outputs_coords[-1], outputs_class[-1],
+                outputs_rel_coords[-1], outputs_rel_class[-1])
+            output['pre_outputs'] = {
+                'pred_det': out,
+                'pred_rel': rel_out
+            }
+
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             rel_enc_outputs_coord = rel_enc_outputs_coord_unact.sigmoid()
@@ -305,27 +315,24 @@ class ERNet(nn.Module):
             output['enc_outputs'] =  {
                                       'pred_det': out,
                                       'pred_rel': rel_out
-                                  }   
-
-        if self.aux_loss:
-            output['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
-                outputs_rel_class, outputs_rel_coord, id_emb, src_emb, dst_emb)
-
+                                  }
         return output  
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_rel_class,
-                      outputs_rel_coord, id_emb, src_emb, dst_emb):
+                      outputs_rel_coord, id_emb, src_emb, dst_emb,
+                      teacher_coor = None, teacher_logits = None,
+                      teacher_rel_coor = None, teacher_rel_logits = None):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
         aux_output = []
         for idx in range(len(outputs_class)-1):
             out = {'pred_logits': outputs_class[idx], 'pred_boxes': outputs_coord[idx],
-                   'id_emb': id_emb[idx]}
+                   'id_emb': id_emb[idx], 'teacher_coor': teacher_coor, 'teacher_logits': teacher_logits}
             if idx < len(outputs_rel_class):
                 rel_out = {'pred_logits': outputs_rel_class[idx], 'pred_boxes': outputs_rel_coord[idx],
-                           'src_emb': src_emb[idx], 'dst_emb': dst_emb[idx]}
+                           'src_emb': src_emb[idx], 'dst_emb': dst_emb[idx], 'teacher_rel_coor': teacher_rel_coor, 'teacher_rel_logits': teacher_rel_logits}
             else:
                 rel_out = None
             aux_output.append({
@@ -380,25 +387,33 @@ class SetCriterion(nn.Module):
         self.disable_torch_grad_focal_loss = True
         self.eps = 1e-8
         self.eps_rel = 1e-8
+        self.num_pos, self.num_neg = None, None
         
     def loss_labels(self, outputs_dict, targets, indices_dict, num_boxes_dict, log=True,
                             alpha=0.25, gamma=2, loss_reduce='sum'):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
+        self.alpha = alpha
+        self.gamma = gamma
         assert 'pred_det' in outputs_dict
         outputs = outputs_dict['pred_det']
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
         indices = indices_dict['det']
+        num_boxes = num_boxes_dict['det']
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
-        
+        target = F.one_hot(target_classes, num_classes=self.num_classes + 1).float() #[..., :-1]
+        loss_ce = torchvision.ops.sigmoid_focal_loss(
+            src_logits, target, self.alpha, self.gamma, reduction='none'
+        )
+        loss_ce = loss_ce.mean(1).sum() * src_logits.shape[1] / num_boxes
         # Cross-Entropy
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        # loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {'loss_ce': loss_ce}   
         
         if log:
@@ -534,6 +549,68 @@ class SetCriterion(nn.Module):
         losses['loss_ciou'] = loss_ciou.sum() / num_boxes
         return losses
 
+    def loss_local(self, outputs_dict, targets, indices_dict, num_boxes_dict, T=5):
+        """Self-Distillation Loss."""
+        assert 'pred_det' in outputs_dict
+        outputs = outputs_dict['pred_det']
+        assert 'pred_boxes' in outputs
+
+        # L1 loss 用于bbox和rel_vect， KL散度用于分类
+        losses = {}
+        if 'teacher_coor' in outputs:
+            indices = indices_dict['det']
+            num_boxes = num_boxes_dict['det']
+            idx = self._get_src_permutation_idx(indices)
+            target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            src_boxes = outputs['pred_boxes']
+            teacher_boxes = outputs['teacher_coor']
+            src_logits = outputs['pred_logits']
+            teacher_logits = outputs['teacher_logits']
+            weight_targets_local = teacher_logits.sigmoid().max(dim=-1)[0]
+            mask = torch.zeros_like(weight_targets_local, dtype=torch.bool)
+            mask[idx] = True
+
+            cious = torch.diag(box_ops.box_iou(
+                    box_ops.box_cxcywh_to_xyxy(outputs['pred_boxes'][idx]),
+                    box_ops.box_cxcywh_to_xyxy(target_boxes))[0])
+
+            weight_targets_local[idx] = cious.reshape_as(weight_targets_local[idx]).to(
+                weight_targets_local.dtype
+            )
+
+            loss_match_local = (
+                    weight_targets_local
+                    * (T ** 2)
+                    * (F.l1_loss(src_boxes, teacher_boxes.detach(), reduction='none')
+                    ).sum(-1)
+            )
+            conf_weight = teacher_logits.sigmoid().max(dim=-1)[0]
+            log_KL = nn.KLDivLoss(reduction='none')(
+                F.log_softmax(src_logits/T, dim=-1),
+                F.softmax(teacher_logits.detach()/T, dim=-1)
+            ).sum(-1)
+            loss_kl_local = conf_weight * (T ** 2) * log_KL
+            mask_logits = torch.zeros_like(conf_weight, dtype=torch.bool)
+            mask_logits[idx] = True
+
+            batch_scale = (
+                    8 / outputs['pred_boxes'].shape[0]
+            )  # Avoid the influence of batch size per GPU
+            self.num_pos, self.num_neg = (
+                (mask.sum() * batch_scale) ** 0.5,
+                ((~mask).sum() * batch_scale) ** 0.5,
+            )
+            loss_match_local1 = loss_match_local[mask].mean() if mask.any() else 0
+            loss_match_local2 = loss_match_local[~mask].mean() if (~mask).any() else 0
+            loss_kl_local1 = loss_kl_local[mask_logits].mean() if mask_logits.any() else 0
+            loss_kl_local2 = loss_kl_local[~mask_logits].mean() if (~mask_logits).any() else 0
+            losses['loss_ddf'] = (
+                (loss_match_local1 * self.num_pos + loss_match_local2 * self.num_neg)
+                + (loss_kl_local1 * self.num_pos + loss_kl_local2 * self.num_neg)
+            ) / (self.num_pos + self.num_neg)
+
+        return losses
+
     def loss_rel_vecs(self, outputs_dict, targets, indices_dict, num_boxes_dict):
         """Compute the losses related to the interaction vector, the L1 regression loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
@@ -554,6 +631,53 @@ class SetCriterion(nn.Module):
         losses['rel_loss_bbox'] = loss_bbox.sum() / num_vecs
         return losses
 
+    def rel_loss_local (self, outputs_dict, targets, indices_dict, num_boxes_dict, T=5):
+        """Self-Distillation Loss."""
+        assert 'pred_rel' in outputs_dict
+        outputs = outputs_dict['pred_rel']
+        assert 'pred_boxes' in outputs
+
+        # L1 loss 用于bbox和rel_vect， KL散度用于分类
+        losses = {}
+        if 'teacher_rel_coor' in outputs:
+            indices = indices_dict['rel']
+            num_vecs = num_boxes_dict['rel']
+            idx = self._get_src_permutation_idx(indices)
+            target_vecs = torch.cat([t['rel_vecs'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            src_vecs = outputs['pred_boxes']
+            teacher_vecs= outputs['teacher_rel_coor']
+            src_logits = outputs['pred_logits']
+            teacher_logits = outputs['teacher_rel_logits']
+            weight_targets_local = teacher_logits.sigmoid().max(dim=-1)[0]
+            mask = torch.zeros_like(weight_targets_local, dtype=torch.bool)
+            mask[idx] = True
+            # mask = mask.unsqueeze(-1).repeat(1, 1, 4).reshape(-1)
+
+            loss_match_local = (
+                    weight_targets_local
+                    * (T ** 2)
+                    * ((F.l1_loss(src_vecs, teacher_vecs.detach(), reduction='none')
+                       ).sum(-1)
+                       +nn.KLDivLoss(reduction="none")(
+                            F.log_softmax(src_logits / T, dim=-1),
+                            F.softmax(teacher_logits.detach() / T, dim=-1)
+                       ).sum(-1))
+            )
+            batch_scale = (
+                    8 / outputs["pred_boxes"].shape[0]
+            )  # Avoid the influence of batch size per GPU
+            self.num_pos, self.num_neg = (
+                (mask.sum() * batch_scale) ** 0.5,
+                ((~mask).sum() * batch_scale) ** 0.5,
+            )
+            loss_match_local1 = loss_match_local[mask].mean() if mask.any() else 0
+            loss_match_local2 = loss_match_local[~mask].mean() if (~mask).any() else 0
+
+            losses["rel_loss_ddf"] = (
+                loss_match_local1 * self.num_pos + loss_match_local2 * self.num_neg
+            ) / (self.num_pos + self.num_neg)
+
+        return losses
 
     def loss_emb_push(self, outputs_dict, targets, indices_dict, num_boxes_dict, margin=8):
         """id embedding push loss.
@@ -615,6 +739,53 @@ class SetCriterion(nn.Module):
 
         return losses
 
+    def _get_global_indices(self, indices_dict, indices_aux_list):
+        results = {}
+        det_results = []
+        rel_results = []
+        det_indices = indices_dict['det']
+        rel_indices = indices_dict['rel']
+        for indices_aux in indices_aux_list:
+            det_aux_indices = indices_aux['det']
+            det_indices = [
+                (torch.cat([idx1[0], idx2[0]]), torch.cat([idx1[1], idx2[1]]))
+                for idx1, idx2 in zip(det_indices.copy(), det_aux_indices.copy())
+            ]
+            rel_aux_indices = indices_aux['rel']
+            rel_indices = [
+                (torch.cat([idx1[0], idx2[0]]), torch.cat([idx1[1], idx2[1]]))
+                for idx1, idx2 in zip(rel_indices.copy(), rel_aux_indices.copy())
+            ]
+
+        for ind in [torch.cat([idx[0][:, None], idx[1][:, None]], 1) for idx in det_indices]:
+            unique, counts = torch.unique(ind, return_counts=True, dim=0)
+            count_sort_indices = torch.argsort(counts, descending=True)
+            unique_sorted = unique[count_sort_indices]
+            column_to_row = {}
+            for idx in unique_sorted:
+                row_idx, col_idx = idx[0].item(), idx[1].item()
+                if row_idx not in column_to_row:
+                    column_to_row[row_idx] = col_idx
+            final_rows = torch.tensor(list(column_to_row.keys()), device=ind.device)
+            final_cols = torch.tensor(list(column_to_row.values()), device=ind.device)
+            det_results.append((final_rows.long(), final_cols.long()))
+
+        for ind in [torch.cat([idx[0][:, None], idx[1][:, None]], 1) for idx in rel_indices]:
+            unique, counts = torch.unique(ind, return_counts=True, dim=0)
+            count_sort_indices = torch.argsort(counts, descending=True)
+            unique_sorted = unique[count_sort_indices]
+            column_to_row = {}
+            for idx in unique_sorted:
+                row_idx, col_idx = idx[0].item(), idx[1].item()
+                if row_idx not in column_to_row:
+                    column_to_row[row_idx] = col_idx
+            final_rows = torch.tensor(list(column_to_row.keys()), device=ind.device)
+            final_cols = torch.tensor(list(column_to_row.values()), device=ind.device)
+            rel_results.append((final_rows.long(), final_cols.long()))
+        results = {'det': det_results, 'rel': rel_results}
+
+        return results
+
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -649,7 +820,9 @@ class SetCriterion(nn.Module):
                 'rel_vecs': self.loss_rel_vecs,
                 'rel_cardinality': self.loss_rel_cardinality,
                 'emb_push': self.loss_emb_push,
-                'emb_pull':self.loss_emb_pull
+                'emb_pull':self.loss_emb_pull,
+                'ddf' : self.loss_local,
+                'rel_ddf': self.rel_loss_local
             }
         if loss not in loss_map:
             return {}
@@ -667,6 +840,37 @@ class SetCriterion(nn.Module):
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
 
         indices_dict = self.matcher(outputs_without_aux, targets)
+        #self._clear_cache()
+
+        if 'aux_outputs' in outputs:
+            indices_aux_list, cached_indices, cached_indices_enc = [],[],[]
+            for i, aux_outputs in enumerate(outputs['aux_outputs'] + [outputs['pre_outputs']]):
+                indices_aux = self.matcher(aux_outputs, targets)
+                cached_indices.append(indices_aux)
+                indices_aux_list.append(indices_aux)
+            for i, aux_outputs in enumerate([outputs['enc_outputs']]):
+                indices_enc = self.matcher(aux_outputs, targets)
+                cached_indices_enc.append(indices_enc)
+                indices_aux_list.append(indices_enc)
+                # indices_aux_list是一个字典列表：[{'det': indices,'rel': rel_indices,}...{}]
+            indices_go_dict = self._get_global_indices(indices_dict, indices_aux_list)
+            num_boxes_go = sum(len(x[0]) for x in indices_go_dict['det'])
+            rel_num_boxes_go = sum(len(x[0]) for x in indices_go_dict['rel'])
+            num_boxes_go = torch.as_tensor(
+                [num_boxes_go], dtype=torch.float, device=next(iter(outputs['pred_det'].values())).device
+            )
+            rel_num_boxes_go = torch.as_tensor(
+                [rel_num_boxes_go], dtype=torch.float, device=next(iter(outputs['pred_rel'].values())).device
+            )
+            num_boxes_go = torch.clamp(num_boxes_go / get_world_size(), min=1).item()
+            rel_num_boxes_go = torch.clamp(rel_num_boxes_go / get_world_size(), min=1).item()
+            num_boxes_go_dict = {
+                'det': num_boxes_go,
+                'rel': rel_num_boxes_go,
+            }
+        else:
+            assert "aux_outputs" in outputs, ""
+
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float,
@@ -687,19 +891,27 @@ class SetCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets,
-                                        indices_dict, num_boxes_dict))
+            #print(f'losses: {loss}')
+            indices_in = indices_go_dict if loss in ['ddf', 'rel_ddf'] else indices_dict
+            num_boxes_in = num_boxes_go_dict if loss in ['ddf', 'rel_ddf'] else num_boxes_dict
+            #print('outputs.keys()',outputs.keys())
+            loss_value = self.get_loss(loss, outputs, targets,
+                                        indices_in, num_boxes_in)
+            #print(f'loss_value: {loss_value}')
+            losses.update(loss_value)
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs.keys():
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 indices_dict = self.matcher(aux_outputs, targets)
                 for loss in self.losses:
+                    indices_in = indices_go_dict if loss in [ 'ddf', 'rel_ddf'] else indices_dict
+                    num_boxes_in = num_boxes_go_dict if loss in ['ddf', 'rel_ddf'] else num_boxes_dict
                     kwargs = {}
                     if loss == 'labels' or loss == 'actions':
                         # Logging is enabled only for the last layer
                         kwargs = {'log': False}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices_dict, num_boxes_dict, **kwargs)
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices_in, num_boxes_in, **kwargs)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
@@ -842,7 +1054,7 @@ class PostProcess(nn.Module):
 
     @torch.no_grad()
     def forward(self, outputs_dict, file_name, target_sizes,
-                rel_topk=20, sub_cls=13):
+                rel_topk=10, sub_cls=13):
         """ Perform the matching of postprocess to generate final predicted HOI triplets
         Parameters:
             outputs: raw outputs of the model
@@ -870,7 +1082,7 @@ class PostProcess(nn.Module):
         out_bbox_flat = out_bbox.flatten(0, 1)
         #print(f'out_bbox_flat:{out_bbox_flat}')
         prob = torch.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+        scores, labels = prob[..., :-1].max(-1) #score实际上为该类别的概率
         #print(f'scores: {scores}, labels: {labels}')
         labels_flat = labels.flatten(0, 1) # '(bs * num_queries, )
         scores_flat = scores.flatten(0, 1)
@@ -1078,10 +1290,21 @@ def build_model(cfg, device):
         two_stage=cfg.TRANSFORMER.TWO_STAGE 
     )
     matcher = build_matcher(cfg)
-    weight_dict = {'loss_ce': cfg.LOSS.DET_CLS_COEF[0], 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[0]}
-    weight_dict['loss_ciou'] = cfg.LOSS.CIOU_LOSS_COEF[0]
-    weight_dict.update({'rel_loss_ce': cfg.LOSS.REL_CLS_COEF, 'rel_loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[1]})
-    weight_dict.update({'loss_pull': 0.1, 'loss_push': 0.1})
+    # weight_dict = {'loss_ce': cfg.LOSS.DET_CLS_COEF[0], 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[0]}
+    # weight_dict['loss_ciou'] = cfg.LOSS.CIOU_LOSS_COEF[0]
+    # weight_dict.update({'rel_loss_ce': cfg.LOSS.REL_CLS_COEF, 'rel_loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[1]})
+    # weight_dict.update({'loss_pull': 0.1, 'loss_push': 0.1})
+    weight_dict = {
+        'loss_ce': cfg.LOSS.DET_CLS_COEF[0],
+        'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[0],
+        'loss_ciou': cfg.LOSS.CIOU_LOSS_COEF[0],
+        'rel_loss_ce': cfg.LOSS.REL_CLS_COEF,
+        'rel_loss_bbox': cfg.LOSS.BBOX_LOSS_COEF[1],
+        'loss_pull': 0.1,
+        'loss_push': 0.1,
+        'loss_ddf': cfg.LOSS.DDF_COEF[0],
+        'rel_loss_ddf': cfg.LOSS.DDF_COEF[1],
+    }
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
         for i in range(cfg.TRANSFORMER.DEC_LAYERS - 1):
@@ -1092,7 +1315,7 @@ def build_model(cfg, device):
         weight_dict.update(aux_weight_dict)
 
     losses = ['labels', 'boxes', 'cardinality', 'actions', 'rel_vecs', 'rel_cardinality',
-              'emb_pull', 'emb_push']
+              'emb_pull', 'emb_push', 'ddf', 'rel_ddf']
     criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict,
                              eos_coef=cfg.LOSS.EOS_COEF, num_classes=num_classes)
     criterion.to(device)

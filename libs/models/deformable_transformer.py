@@ -770,7 +770,7 @@ class InteractionTransformerDecoder(nn.Module):
 
         output = tgt
         rel_output = rel_tgt
-
+        output_detach = rel_output_detach = 0
         intermediate = []
         rel_intermediate = []
         intermediate_reference_points = []
@@ -795,7 +795,8 @@ class InteractionTransformerDecoder(nn.Module):
             
             # hack implementation for iterative bounding box refinement
             if self.bbox_embed is not None:
-                tmp = self.bbox_embed[lid](output,self.training)
+                #print("self.bbox_embed is not None")
+                tmp = self.bbox_embed[lid](output + output_detach,self.training)
                 if hs_reference_points.shape[-1] == 4:
                     new_hs_reference_points = tmp + inverse_sigmoid(hs_reference_points)
                     new_hs_reference_points = new_hs_reference_points.sigmoid()
@@ -834,7 +835,8 @@ class InteractionTransformerDecoder(nn.Module):
 
             # hack implementation for iterative bounding box refinement
             if self.rel_bbox_embed is not None:
-                tmp = self.rel_bbox_embed[lid](rel_output,self.training)
+                #print("self.rel_bbox_embed is not None")
+                tmp = self.rel_bbox_embed[lid](rel_output + rel_output_detach,self.training)
                 if rel_hs_reference_points.shape[-1] == 4:
                     new_rel_hs_reference_points = tmp + inverse_sigmoid(rel_hs_reference_points)
                     new_rel_hs_reference_points = new_rel_hs_reference_points.sigmoid()
@@ -856,6 +858,11 @@ class InteractionTransformerDecoder(nn.Module):
                 intermediate_reference_points.append(hs_reference_points)
                 rel_intermediate.append(rel_output)
                 rel_intermediate_reference_points.append(rel_hs_reference_points)
+
+            # pred_corners_undetach = pred_corners
+            # ref_points_detach = inter_ref_bbox.detach()
+            output_detach = output.detach()
+            rel_output_detach = rel_output.detach()
 
         if self.return_intermediate:
             return torch.stack(intermediate), torch.stack(rel_intermediate), torch.stack(intermediate_reference_points), torch.stack(rel_intermediate_reference_points)

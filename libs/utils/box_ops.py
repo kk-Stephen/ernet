@@ -36,7 +36,6 @@ def box_iou(boxes1, boxes2):
     iou = inter / union
     return iou, union
 
-
 def bbox_overlaps(boxes1, boxes2, mode='iou', is_aligned=False):
     """Calculate overlap between two set of bboxes.
 
